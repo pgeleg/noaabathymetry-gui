@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "noaabathymetry-gui"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Desktop GUI for NOAA National Bathymetric Source tools"
+dependencies = [
+    "noaabathymetry",
+    # PySide6 and PySide6-WebEngine must be installed via conda:
+    # conda install -c conda-forge pyside6
+]
+
+[project.scripts]
+nbs-gui = "src.main:main"

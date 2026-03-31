@@ -1,0 +1,101 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS
+            artifact: National.Bathymetric.Source.macOS
+          - os: windows-latest
+            name: Windows
+            artifact: National.Bathymetric.Source.Windows
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.12"
+          channels: conda-forge
+          activate-environment: build
+          miniforge-version: latest
+
+      - name: Install conda dependencies
+        run: conda install -y gdal pyside6
+
+      - name: Install pip dependencies
+        run: |
+          pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo.git@dev
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Generate Windows icon
+        if: runner.os == 'Windows'
+        run: python -c "from PIL import Image; img=Image.open('assets/NOAA-1.png'); img.save('assets/NOAA.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+      - name: Generate macOS icon
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p assets/NOAA.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size assets/NOAA-1.png --out assets/NOAA.iconset/icon_${size}x${size}.png 2>/dev/null
+          done
+          cp assets/NOAA.iconset/icon_32x32.png assets/NOAA.iconset/icon_16x16@2x.png
+          cp assets/NOAA.iconset/icon_64x64.png assets/NOAA.iconset/icon_32x32@2x.png
+          cp assets/NOAA.iconset/icon_256x256.png assets/NOAA.iconset/icon_128x128@2x.png
+          cp assets/NOAA.iconset/icon_512x512.png assets/NOAA.iconset/icon_256x256@2x.png
+          iconutil -c icns assets/NOAA.iconset
+          rm -rf assets/NOAA.iconset
+
+      - name: Build with PyInstaller
+        run: pyinstaller nbs_gui.spec
+
+      - name: Zip macOS app
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          zip -r -y -q "../${{ matrix.artifact }}.zip" "National Bathymetric Source.app"
+
+      - name: Zip Windows folder
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist\NBS Bathymetry" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          generate_release_notes: true

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>National Bathymetric Source</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div id="topbar">
+        <button class="icon-btn active" id="btn-view-app" onclick="switchView('app')" title="App">⌂</button>
+        <button class="icon-btn" id="btn-view-docs" onclick="switchView('docs')" title="Docs">?</button>
+        <div class="topbar-divider"></div>
+        <div class="topbar-item">
+            <div style="display:flex;gap:4px;">
+                <div style="flex:1;position:relative;">
+                    <input type="text" id="project-dir" placeholder="/path/to/project"
+                           oninput="onDirInput()" onfocus="onDirFocus()" onclick="onDirClick()" autocomplete="off" />
+                    <div id="dir-suggestions" class="suggestions"></div>
+                </div>
+                <button onclick="browseDir()" style="width:auto;padding:6px 14px;min-width:auto;">Open</button>
+            </div>
+        </div>
+        <div class="topbar-item" style="min-width:140px;max-width:180px;position:relative;">
+            <div id="source-select" class="custom-select" onclick="toggleSourceDropdown()">
+                <span id="source-label">BlueTopo</span>
+                <span class="select-arrow">▾</span>
+            </div>
+            <div id="source-dropdown" class="custom-dropdown">
+                <div class="dropdown-item" data-value="bluetopo" onclick="pickSource(this)">BlueTopo</div>
+                <div class="dropdown-item" data-value="modeling" onclick="pickSource(this)">Modeling</div>
+                <div class="dropdown-item" data-value="bag" onclick="pickSource(this)">BAG</div>
+                <div class="dropdown-item" data-value="s102v21" onclick="pickSource(this)">S102 v2.1</div>
+                <div class="dropdown-item" data-value="s102v22" onclick="pickSource(this)">S102 v2.2</div>
+                <div class="dropdown-item" data-value="s102v30" onclick="pickSource(this)">S102 v3.0</div>
+            </div>
+            <input type="hidden" id="data-source" value="bluetopo" />
+        </div>
+    </div>
+
+    <div id="main">
+        <div id="map"></div>
+
+        <div id="docs-overlay" style="display:none;">
+            <iframe id="docs-frame" src="about:blank"></iframe>
+        </div>
+    </div>
+
+    <div id="log-header" onclick="toggleLog()">
+        <div class="log-dot" id="log-dot"></div>
+        <span>Output</span>
+        <span class="log-command" id="log-command"></span>
+        <span class="log-grip"></span>
+    </div>
+    <div id="log-pane">
+        <pre id="results"></pre>
+    </div>
+
+    <div class="commandbar" id="fetchbar">
+        <button id="btn-fetch" class="command-btn" onclick="runFetch()">Fetch</button>
+        <div class="commandbar-field" style="position:relative;">
+            <span>Geometry</span>
+            <input type="text" id="opt-geometry" placeholder="draw on map, or path / geojson / WKT / bbox" oninput="onGeomInput()" autocomplete="off">
+            <button class="browse-btn" onclick="browseGeometry()" title="Browse for geometry file">…</button>
+            <div id="geom-suggestions" class="suggestions"></div>
+        </div>
+        <div class="commandbar-field">
+            <span>Only Resolution(s)</span>
+            <input type="text" id="opt-fetch-resolution" placeholder="e.g. 4,8 (meters)">
+        </div>
+    </div>
+
+    <div class="commandbar" id="mosaicbar">
+        <button id="btn-mosaic" class="command-btn" onclick="runMosaic()">Mosaic</button>
+        <label class="switch-label" onclick="document.getElementById('opt-hillshade').classList.toggle('on')">
+            <span class="switch" id="opt-hillshade"><span class="switch-knob"></span></span>
+            Hillshade
+        </label>
+        <div class="commandbar-field">
+            <span>Workers</span>
+            <input type="number" id="opt-workers" min="1" placeholder="auto">
+        </div>
+        <div class="commandbar-field">
+            <span>Resolution</span>
+            <input type="text" id="opt-resolution" placeholder="auto">
+        </div>
+        <span class="commandbar-disclaimer"><strong>Disclaimer:</strong> Multiple workers increases memory usage. Mosaics require significant disk space. Consider your system resources.</span>
+    </div>
+
+    <div id="statusbar">
+        <span class="left" id="statusbar-left">Ready</span>
+        <span class="right" id="statusbar-right"></span>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script src="map.js"></script>
+    <script src="panels.js"></script>
+</body>
+</html>

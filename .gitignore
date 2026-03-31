@@ -1,0 +1,38 @@
+# Build / distribution
+dist
+dist_nuitka
+dist_nuitka_onefile
+build
+*.egg
+*.egg-info
+*.whl
+
+# Python
+__pycache__
+*.pyc
+*.so
+
+# Testing
+pytest_temporary_data
+.pytest_cache
+.coverage
+htmlcov
+
+# Virtual environments
+.venv
+venv
+env
+
+# IDE
+.idea
+.vscode
+
+# Docs
+book
+
+# OS
+.DS_Store
+
+# PyInstaller
+*.spec.bak
+nuitka-crash-report.xml
