@@ -38,11 +38,10 @@ jobs:
           activate-environment: build
           miniforge-version: latest
 
-      - name: Install conda dependencies
-        run: conda install -y gdal pyside6
-
-      - name: Install pip dependencies
+      - name: Install dependencies
         run: |
+          conda install -y gdal
+          pip install PySide6
           pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo.git@dev
           pip install pyinstaller
           pip install -e .
