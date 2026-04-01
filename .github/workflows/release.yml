@@ -49,7 +49,9 @@ jobs:
 
       - name: Generate Windows icon
         if: runner.os == 'Windows'
-        run: python -c "from PIL import Image; img=Image.open('assets/NOAA-1.png'); img.save('assets/NOAA.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+        run: |
+          pip install pillow
+          python -c "from PIL import Image; img=Image.open('assets/NOAA-1.png'); img.save('assets/NOAA.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 
       - name: Generate macOS icon
         if: runner.os == 'macOS'
