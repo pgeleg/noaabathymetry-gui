@@ -5,7 +5,7 @@ import sys
 
 # Disable GPU compositing on Windows to prevent UI flickering
 if sys.platform == "win32":
-    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-gpu-rasterization --use-angle=d3d11")
 
 from PySide6.QtWidgets import QApplication
 from src.window import MainWindow
