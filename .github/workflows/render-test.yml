@@ -1,0 +1,47 @@
+name: Render Test Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    name: Build Render Test (Windows)
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.12"
+          channels: conda-forge
+          activate-environment: build
+          miniforge-version: latest
+
+      - name: Install dependencies
+        run: |
+          conda install -y gdal
+          pip install PySide6
+          pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo.git@dev
+          pip install pyinstaller
+
+      - name: Build
+        working-directory: test_render
+        run: pyinstaller test_render.spec
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "test_render\dist\RenderTest" -DestinationPath "RenderTest.Windows.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RenderTest.Windows
+          path: RenderTest.Windows.zip
