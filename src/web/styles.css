@@ -94,6 +94,7 @@ body {
 
 #map {
     flex: 1;
+    position: relative;
 }
 
 #log-header {
@@ -393,36 +394,36 @@ button:disabled {
 
 /* ── Map popups ─────────────────────────────────── */
 
-.dark-popup .leaflet-popup-content-wrapper {
+.dark-popup .maplibregl-popup-content {
     background: rgba(24, 24, 28, 0.95);
     color: var(--fg);
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
     padding: 0;
-}
-
-.dark-popup .leaflet-popup-content {
-    margin: 0;
     min-width: 160px;
     max-height: 280px;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
 }
 
-.dark-popup .leaflet-popup-tip {
-    background: rgba(24, 24, 28, 0.95);
-    box-shadow: none;
+.dark-popup .maplibregl-popup-content::-webkit-scrollbar {
+    width: 6px;
 }
 
-.dark-popup .leaflet-popup-close-button {
-    color: var(--fg-dim);
-    font-size: 16px;
-    top: 4px;
-    right: 6px;
+.dark-popup .maplibregl-popup-content::-webkit-scrollbar-track {
+    background: transparent;
 }
 
-.dark-popup .leaflet-popup-close-button:hover {
-    color: var(--fg);
+.dark-popup .maplibregl-popup-content::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.15);
+    border-radius: 3px;
 }
+
+.dark-popup .maplibregl-popup-tip {
+    border-top-color: rgba(24, 24, 28, 0.95);
+}
+
 
 .popup-table {
     border-collapse: collapse;
@@ -461,6 +462,9 @@ button:disabled {
 /* ── Map legend ─────────────────────────────────── */
 
 .map-legend {
+    position: absolute;
+    bottom: 30px;
+    right: 10px;
     background: rgba(24, 24, 28, 0.9);
     border-radius: 8px;
     padding: 8px 10px;
@@ -469,6 +473,7 @@ button:disabled {
     color: var(--fg-muted);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
     line-height: 1;
+    z-index: 1;
 }
 
 .legend-row {
@@ -581,8 +586,41 @@ button:disabled {
 
 /* ── Map toolbar ────────────────────────────────── */
 
+.maplibregl-ctrl-group button {
+    border-radius: 0 !important;
+}
+
+.draw-btn {
+    width: 29px !important;
+    height: 29px !important;
+    padding: 0 !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(0,0,0,0.1) !important;
+    border-radius: 0 !important;
+    background: white !important;
+    color: rgb(80,80,80) !important;
+    font-size: 14px !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.draw-btn:hover {
+    background: rgb(240,240,240) !important;
+    color: rgb(40,40,40) !important;
+}
+
+.draw-btn.active {
+    background: rgb(220,230,255) !important;
+    color: rgb(50,80,200) !important;
+}
+
 .map-toolbar {
-    position: relative;
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+    overflow: visible;
 }
 
 .map-toolbar .toolbar-btn {
@@ -679,6 +717,9 @@ button:disabled {
 /* ── Cursor coordinates ─────────────────────────── */
 
 .map-coords {
+    position: absolute;
+    bottom: 4px;
+    left: 10px;
     background: rgba(24, 24, 28, 0.8);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -689,18 +730,18 @@ button:disabled {
     font-family: var(--font-mono);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
     pointer-events: none;
+    z-index: 1;
 }
 
 /* ── Map layer control ───────────────────────────── */
 
 .map-layer-control {
+    position: absolute;
+    top: 10px;
+    right: 10px;
     display: flex;
     gap: 4px;
-    margin: 10px 10px 0 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    background: none !important;
-    box-shadow: none !important;
+    z-index: 1;
 }
 
 .layer-toggle {

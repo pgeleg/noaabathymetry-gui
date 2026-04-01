@@ -1,30 +1,57 @@
-// Leaflet map with draw tools for AOI selection.
+// MapLibre map with draw tools for AOI selection.
 
-var map = L.map("map", { preferCanvas: true }).setView([30, -80], 5);
+// ── Basemaps ─────────────────────────────────────────
 
-// Basemap options — all free, no API keys required
-var basemaps = {
-    "Voyager": L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        subdomains: "abcd",
-        maxZoom: 20,
-    }),
-    "Dark": L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        subdomains: "abcd",
-        maxZoom: 20,
-    }),
-    "Light": L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        subdomains: "abcd",
-        maxZoom: 20,
-    }),
+var basemapStyles = {
+    "Voyager": {
+        version: 8,
+        sources: { carto: { type: "raster", tiles: ["https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"], tileSize: 256 } },
+        layers: [{ id: "carto", type: "raster", source: "carto" }]
+    },
+    "Dark": {
+        version: 8,
+        sources: { carto: { type: "raster", tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png", "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], tileSize: 256 } },
+        layers: [{ id: "carto", type: "raster", source: "carto" }]
+    },
+    "Light": {
+        version: 8,
+        sources: { carto: { type: "raster", tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], tileSize: 256 } },
+        layers: [{ id: "carto", type: "raster", source: "carto" }]
+    },
 };
 
-var activeBasemap = basemaps["Voyager"];
-activeBasemap.addTo(map);
-var basemapNames = Object.keys(basemaps);
+var basemapNames = Object.keys(basemapStyles);
 var basemapIndex = 0;
+
+var map = new maplibregl.Map({
+    container: "map",
+    style: basemapStyles["Voyager"],
+    center: [-80, 30],
+    zoom: 4,
+    attributionControl: false,
+});
+
+// Integer zoom with smooth animation on scroll
+map.scrollZoom.disable();
+var scrollZooming = false;
+map.getCanvas().addEventListener("wheel", function (e) {
+    e.preventDefault();
+    if (scrollZooming) return;
+    scrollZooming = true;
+    var z = Math.round(map.getZoom());
+    var newZ = e.deltaY < 0 ? z + 1 : z - 1;
+    newZ = Math.max(1, Math.min(20, newZ));
+    if (e.deltaY < 0) {
+        var point = map.unproject([e.offsetX, e.offsetY]);
+        map.easeTo({ zoom: newZ, center: point, duration: 300 });
+    } else {
+        map.easeTo({ zoom: newZ, duration: 300 });
+    }
+    map.once("moveend", function () { scrollZooming = false; });
+}, { passive: false });
+
+map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
 
 function setBasemapByName(name) {
     var idx = basemapNames.indexOf(name);
@@ -32,40 +59,253 @@ function setBasemapByName(name) {
 }
 
 function setBasemap(idx) {
-    map.removeLayer(activeBasemap);
     basemapIndex = idx;
-    activeBasemap = basemaps[basemapNames[basemapIndex]];
-    activeBasemap.addTo(map);
-    if (bridge) bridge.save_basemap(basemapNames[basemapIndex]);
+    // Preserve sources/layers we've added
+    var center = map.getCenter();
+    var zoom = map.getZoom();
+    map.setStyle(basemapStyles[basemapNames[idx]]);
+    map.once("styledata", function () {
+        map.jumpTo({ center: center, zoom: zoom });
+        readdAllSources();
+    });
+    if (bridge) bridge.save_basemap(basemapNames[idx]);
 }
+
+// ── Draw tools (custom polygon drawing) ──────────────
+
+var currentGeometry = null;
+var drawingMode = false;
+var drawPoints = [];
+
+var DrawControl = {
+    onAdd: function () {
+        var div = document.createElement("div");
+        div.className = "maplibregl-ctrl maplibregl-ctrl-group";
+        div.innerHTML =
+            '<button id="draw-polygon-btn" class="draw-btn" title="Draw polygon" onclick="startDrawing()">⬠</button>' +
+            '<button id="draw-rect-btn" class="draw-btn" title="Draw rectangle" onclick="startRectangle()">▭</button>' +
+            '<button id="draw-clear-btn" class="draw-btn" title="Clear geometry" onclick="clearDrawing()">✕</button>';
+        return div;
+    },
+    onRemove: function () {}
+};
+map.addControl(DrawControl, "top-left");
+
+function startDrawing() {
+    if (drawingMode) {
+        finishDrawing();
+        return;
+    }
+    if (rectMode) cancelRect();
+    drawingMode = true;
+    drawPoints = [];
+    map.dragPan.disable();
+    map.doubleClickZoom.disable();
+    map.getCanvas().style.setProperty("cursor", "crosshair", "important");
+    document.getElementById("draw-polygon-btn").classList.add("active");
+    // Clear previous
+    if (map.getSource("draw-polygon")) map.getSource("draw-polygon").setData({ type: "FeatureCollection", features: [] });
+    if (map.getSource("draw-points")) map.getSource("draw-points").setData({ type: "FeatureCollection", features: [] });
+}
+
+function finishDrawing() {
+    drawingMode = false;
+    map.dragPan.enable();
+    map.doubleClickZoom.enable();
+    map.getCanvas().style.setProperty("cursor", "", "");
+    document.getElementById("draw-polygon-btn").classList.remove("active");
+    if (drawPoints.length >= 3) {
+        var coords = drawPoints.slice();
+        coords.push(coords[0]); // close the ring
+        var geom = { type: "Polygon", coordinates: [coords] };
+        currentGeometry = JSON.stringify(geom);
+        document.getElementById("opt-geometry").value = currentGeometry;
+        updateDrawLayer();
+    }
+}
+
+function clearDrawing() {
+    drawingMode = false;
+    drawPoints = [];
+    currentGeometry = null;
+    map.dragPan.enable();
+    map.doubleClickZoom.enable();
+    map.getCanvas().style.setProperty("cursor", "", "");
+    document.getElementById("draw-polygon-btn").classList.remove("active");
+    document.getElementById("draw-rect-btn").classList.remove("active");
+    document.getElementById("opt-geometry").value = "";
+    if (map.getSource("draw-polygon")) map.getSource("draw-polygon").setData({ type: "FeatureCollection", features: [] });
+    if (map.getSource("draw-points")) map.getSource("draw-points").setData({ type: "FeatureCollection", features: [] });
+}
+
+// ── Rectangle drawing (drag) ─────────────────────────
+
+var rectMode = false;
+var rectStart = null;
+
+function startRectangle() {
+    if (rectMode) {
+        cancelRect();
+        return;
+    }
+    if (drawingMode) finishDrawing();
+    rectMode = true;
+    rectStart = null;
+    map.dragPan.disable();
+    map.getCanvas().style.setProperty("cursor", "crosshair", "important");
+    document.getElementById("draw-rect-btn").classList.add("active");
+}
+
+function cancelRect() {
+    rectMode = false;
+    rectStart = null;
+    map.dragPan.enable();
+    map.getCanvas().style.setProperty("cursor", "", "");
+    document.getElementById("draw-rect-btn").classList.remove("active");
+}
+
+function finishRect(start, end) {
+    rectMode = false;
+    rectStart = null;
+    map.dragPan.enable();
+    map.getCanvas().style.setProperty("cursor", "", "");
+    document.getElementById("draw-rect-btn").classList.remove("active");
+    var coords = [
+        [start.lng, start.lat],
+        [end.lng, start.lat],
+        [end.lng, end.lat],
+        [start.lng, end.lat],
+        [start.lng, start.lat],
+    ];
+    var geom = { type: "Polygon", coordinates: [coords] };
+    currentGeometry = JSON.stringify(geom);
+    document.getElementById("opt-geometry").value = currentGeometry;
+    drawPoints = coords.slice(0, 4);
+    updateDrawLayer();
+}
+
+map.on("mousedown", function (e) {
+    if (!rectMode) return;
+    rectStart = e.lngLat;
+});
+
+map.on("mousemove", function (e) {
+    if (!rectMode || !rectStart) return;
+    var s = rectStart;
+    var c = e.lngLat;
+    var coords = [
+        [s.lng, s.lat], [c.lng, s.lat], [c.lng, c.lat], [s.lng, c.lat], [s.lng, s.lat]
+    ];
+    if (map.getSource("draw-polygon")) {
+        map.getSource("draw-polygon").setData({
+            type: "FeatureCollection",
+            features: [{ type: "Feature", geometry: { type: "Polygon", coordinates: [coords] }, properties: {} }]
+        });
+    }
+});
+
+map.on("mouseup", function (e) {
+    if (!rectMode || !rectStart) return;
+    if (Math.abs(e.lngLat.lng - rectStart.lng) > 0.001 || Math.abs(e.lngLat.lat - rectStart.lat) > 0.001) {
+        finishRect(rectStart, e.lngLat);
+    } else {
+        rectStart = null; // click too small, reset
+    }
+});
+
+function raiseDrawLayers() {
+    ["draw-fill", "draw-line", "draw-vertices"].forEach(function (id) {
+        if (map.getLayer(id)) map.moveLayer(id);
+    });
+}
+
+function updateDrawLayer() {
+    var features = [];
+    if (drawPoints.length >= 3) {
+        var coords = drawPoints.slice();
+        coords.push(coords[0]);
+        features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [coords] }, properties: {} });
+    } else if (drawPoints.length >= 2) {
+        features.push({ type: "Feature", geometry: { type: "LineString", coordinates: drawPoints }, properties: {} });
+    }
+    if (map.getSource("draw-polygon")) {
+        map.getSource("draw-polygon").setData({ type: "FeatureCollection", features: features });
+    }
+    var pointFeatures = drawPoints.map(function (p) {
+        return { type: "Feature", geometry: { type: "Point", coordinates: p }, properties: {} };
+    });
+    if (map.getSource("draw-points")) {
+        map.getSource("draw-points").setData({ type: "FeatureCollection", features: pointFeatures });
+    }
+}
+
+map.on("load", function () {
+    map.addSource("draw-polygon", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    map.addSource("draw-points", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    map.addLayer({ id: "draw-fill", type: "fill", source: "draw-polygon", paint: { "fill-color": "rgba(100,140,255,0.15)", "fill-opacity": 1 } });
+    map.addLayer({ id: "draw-line", type: "line", source: "draw-polygon", paint: { "line-color": "rgba(100,140,255,0.8)", "line-width": 2, "line-dasharray": [3, 2] } });
+    map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-points", paint: { "circle-radius": 4, "circle-color": "rgba(100,140,255,1)", "circle-stroke-color": "white", "circle-stroke-width": 1.5 } });
+});
+
+function segmentsIntersect(a1, a2, b1, b2) {
+    var d1x = a2[0] - a1[0], d1y = a2[1] - a1[1];
+    var d2x = b2[0] - b1[0], d2y = b2[1] - b1[1];
+    var cross = d1x * d2y - d1y * d2x;
+    if (Math.abs(cross) < 1e-12) return false;
+    var dx = b1[0] - a1[0], dy = b1[1] - a1[1];
+    var t = (dx * d2y - dy * d2x) / cross;
+    var u = (dx * d1y - dy * d1x) / cross;
+    return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
+}
+
+function wouldSelfIntersect(points, newPoint) {
+    if (points.length < 2) return false;
+    var newEdge = [points[points.length - 1], newPoint];
+    for (var i = 0; i < points.length - 1; i++) {
+        if (segmentsIntersect(newEdge[0], newEdge[1], points[i], points[i + 1])) return true;
+    }
+    return false;
+}
+
+map.on("click", function (e) {
+    if (!drawingMode) return;
+    var pt = [e.lngLat.lng, e.lngLat.lat];
+    if (wouldSelfIntersect(drawPoints, pt)) {
+        showToast("Polygon edges cannot cross");
+        return;
+    }
+    drawPoints.push(pt);
+    updateDrawLayer();
+});
+
+map.on("dblclick", function (e) {
+    if (!drawingMode) return;
+    e.preventDefault();
+    // Check if closing edge would self-intersect
+    if (drawPoints.length >= 3 && wouldSelfIntersect(drawPoints, drawPoints[0])) {
+        showToast("Polygon edges cannot cross");
+        return;
+    }
+    finishDrawing();
+});
+
+// ── Cursor coordinates ───────────────────────────────
+
+var coordDiv = document.createElement("div");
+coordDiv.className = "map-coords";
+coordDiv.textContent = "0.0000, 0.0000";
+document.getElementById("map").appendChild(coordDiv);
+
+map.on("mousemove", function (e) {
+    coordDiv.textContent = e.lngLat.lat.toFixed(4) + ", " + e.lngLat.lng.toFixed(4);
+});
 
 // ── Lat/long gridlines ───────────────────────────────
-
-var gridLayer = L.layerGroup();
-var gridVisible = false;
-
-function buildGrid() {
-    gridLayer.clearLayers();
-    var style = { color: gridColor, weight: 0.5 };
-    for (var lat = -80; lat <= 80; lat += 10) {
-        gridLayer.addLayer(L.polyline([[lat, -180], [lat, 180]], style));
-        gridLayer.addLayer(L.marker([lat, -178], {
-            icon: L.divIcon({ className: "grid-label", html: "<span style='color:" + gridLabelColor + "'>" + lat + "°</span>", iconSize: [30, 12] }),
-        }));
-    }
-    for (var lng = -180; lng <= 180; lng += 10) {
-        gridLayer.addLayer(L.polyline([[-85, lng], [85, lng]], style));
-        gridLayer.addLayer(L.marker([83, lng], {
-            icon: L.divIcon({ className: "grid-label", html: "<span style='color:" + gridLabelColor + "'>" + lng + "°</span>", iconSize: [36, 12] }),
-        }));
-    }
-}
-
-buildGrid();
 
 var gridColorIndex = 0;
 var gridColor = "rgba(255,255,255,0.25)";
 var gridLabelColor = "rgba(255,255,255,0.4)";
+var gridVisible = false;
 
 var gridColors = [
     { name: "White", line: "rgba(255,255,255,0.25)", label: "rgba(255,255,255,0.4)" },
@@ -74,17 +314,38 @@ var gridColors = [
     { name: "Red", line: "rgba(220,60,60,0.3)", label: "rgba(220,60,60,0.5)" },
 ];
 
+function buildGridGeoJSON() {
+    var features = [];
+    for (var lat = -80; lat <= 80; lat += 10) {
+        features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[-180, lat], [180, lat]] }, properties: { label: lat + "°" } });
+    }
+    for (var lng = -180; lng <= 180; lng += 10) {
+        features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[lng, -85], [lng, 85]] }, properties: { label: lng + "°" } });
+    }
+    return { type: "FeatureCollection", features: features };
+}
+
+function addGridToMap() {
+    if (map.getSource("grid")) return;
+    map.addSource("grid", { type: "geojson", data: buildGridGeoJSON() });
+    map.addLayer({ id: "grid-lines", type: "line", source: "grid", paint: { "line-color": gridColor, "line-width": 0.5 } });
+}
+
+function removeGridFromMap() {
+    if (map.getLayer("grid-lines")) map.removeLayer("grid-lines");
+    if (map.getSource("grid")) map.removeSource("grid");
+}
+
 function setGridColor(idx) {
     gridColorIndex = idx;
     gridColor = gridColors[idx].line;
     gridLabelColor = gridColors[idx].label;
-    buildGrid();
-    if (!gridVisible) {
-        gridVisible = true;
-        gridLayer.addTo(map);
+    if (gridVisible) {
+        removeGridFromMap();
+        addGridToMap();
     } else {
-        map.removeLayer(gridLayer);
-        gridLayer.addTo(map);
+        gridVisible = true;
+        addGridToMap();
     }
     document.getElementById("toolbar-grid").classList.add("toolbar-active");
 }
@@ -92,51 +353,17 @@ function setGridColor(idx) {
 function gridOff() {
     if (gridVisible) {
         gridVisible = false;
-        map.removeLayer(gridLayer);
+        removeGridFromMap();
         document.getElementById("toolbar-grid").classList.remove("toolbar-active");
     }
 }
 
-function toggleGridMenu() {
-    var menu = document.getElementById("grid-menu");
-    var wasOpen = menu.style.display === "block";
-    closeAllMenus();
-    if (wasOpen) return;
-    menu.innerHTML = "";
-    gridColors.forEach(function (c, i) {
-        var item = document.createElement("div");
-        item.className = "toolbar-menu-item" + (gridVisible && i === gridColorIndex ? " active" : "");
-        item.innerHTML = "<span class='color-dot' style='background:" + c.line.replace(/0\.\d+\)/, "0.8)") + "'></span>" + c.name;
-        item.onclick = function (e) {
-            e.stopPropagation();
-            setGridColor(i);
-            menu.style.display = "none";
-        };
-        menu.appendChild(item);
-    });
-    var sep = document.createElement("div");
-    sep.className = "toolbar-menu-sep";
-    menu.appendChild(sep);
-    var off = document.createElement("div");
-    off.className = "toolbar-menu-item" + (!gridVisible ? " active" : "");
-    off.textContent = "Off";
-    off.onclick = function (e) {
-        e.stopPropagation();
-        gridOff();
-        menu.style.display = "none";
-    };
-    menu.appendChild(off);
-    menu.style.display = "block";
-}
-
 // ── UTM zone dividers ────────────────────────────────
 
-var utmLayer = L.layerGroup();
-var utmVisible = false;
-
 var utmColorIndex = 0;
-var utmColor = "rgba(255, 180, 50, 0.3)";
-var utmLabelColor = "rgba(255, 180, 50, 0.5)";
+var utmColor = "rgba(255,180,50,0.3)";
+var utmLabelColor = "rgba(255,180,50,0.5)";
+var utmVisible = false;
 
 var utmColors = [
     { name: "Amber", line: "rgba(255,180,50,0.3)", label: "rgba(255,180,50,0.5)" },
@@ -145,17 +372,36 @@ var utmColors = [
     { name: "Green", line: "rgba(100,190,140,0.3)", label: "rgba(100,190,140,0.5)" },
 ];
 
+function buildUtmGeoJSON() {
+    var features = [];
+    for (var zone = 1; zone <= 60; zone++) {
+        var lng = -180 + (zone - 1) * 6;
+        features.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[lng, -80], [lng, 84]] }, properties: { label: String(zone) } });
+    }
+    return { type: "FeatureCollection", features: features };
+}
+
+function addUtmToMap() {
+    if (map.getSource("utm")) return;
+    map.addSource("utm", { type: "geojson", data: buildUtmGeoJSON() });
+    map.addLayer({ id: "utm-lines", type: "line", source: "utm", paint: { "line-color": utmColor, "line-width": 1, "line-dasharray": [4, 4] } });
+}
+
+function removeUtmFromMap() {
+    if (map.getLayer("utm-lines")) map.removeLayer("utm-lines");
+    if (map.getSource("utm")) map.removeSource("utm");
+}
+
 function setUtmColor(idx) {
     utmColorIndex = idx;
     utmColor = utmColors[idx].line;
     utmLabelColor = utmColors[idx].label;
-    buildUtmZones();
-    if (!utmVisible) {
-        utmVisible = true;
-        utmLayer.addTo(map);
+    if (utmVisible) {
+        removeUtmFromMap();
+        addUtmToMap();
     } else {
-        map.removeLayer(utmLayer);
-        utmLayer.addTo(map);
+        utmVisible = true;
+        addUtmToMap();
     }
     document.getElementById("toolbar-utm").classList.add("toolbar-active");
 }
@@ -163,75 +409,29 @@ function setUtmColor(idx) {
 function utmOff() {
     if (utmVisible) {
         utmVisible = false;
-        map.removeLayer(utmLayer);
+        removeUtmFromMap();
         document.getElementById("toolbar-utm").classList.remove("toolbar-active");
     }
 }
 
-function buildUtmZones() {
-    utmLayer.clearLayers();
-    var style = { color: utmColor, weight: 1, dashArray: "4, 4" };
-    for (var zone = 1; zone <= 60; zone++) {
-        var lng = -180 + (zone - 1) * 6;
-        utmLayer.addLayer(L.polyline([[-80, lng], [84, lng]], style));
-        utmLayer.addLayer(L.marker([0, lng + 3], {
-            icon: L.divIcon({ className: "utm-label", html: "<span style='color:" + utmLabelColor + "'>" + zone + "</span>", iconSize: [20, 12] }),
-        }));
-    }
-}
-
-function toggleUtmMenu() {
-    var menu = document.getElementById("utm-menu");
-    var wasOpen = menu.style.display === "block";
-    closeAllMenus();
-    if (wasOpen) return;
-    menu.innerHTML = "";
-    utmColors.forEach(function (c, i) {
-        var item = document.createElement("div");
-        item.className = "toolbar-menu-item" + (utmVisible && i === utmColorIndex ? " active" : "");
-        item.innerHTML = "<span class='color-dot' style='background:" + c.line.replace(/0\.\d+\)/, "0.8)") + "'></span>" + c.name;
-        item.onclick = function (e) {
-            e.stopPropagation();
-            setUtmColor(i);
-            menu.style.display = "none";
-        };
-        menu.appendChild(item);
-    });
-    var sep = document.createElement("div");
-    sep.className = "toolbar-menu-sep";
-    menu.appendChild(sep);
-    var off = document.createElement("div");
-    off.className = "toolbar-menu-item" + (!utmVisible ? " active" : "");
-    off.textContent = "Off";
-    off.onclick = function (e) {
-        e.stopPropagation();
-        utmOff();
-        menu.style.display = "none";
-    };
-    menu.appendChild(off);
-    menu.style.display = "block";
-}
-
-buildUtmZones();
-
-
-
 // ── Map toolbar ──────────────────────────────────────
 
-var toolbarControl = L.control({ position: "topleft" });
-toolbarControl.onAdd = function () {
-    var div = L.DomUtil.create("div", "map-toolbar leaflet-bar");
-    div.innerHTML =
-        '<a class="toolbar-btn" id="toolbar-basemap" href="#" onclick="event.preventDefault();toggleBasemapMenu()" title="Basemap">◫</a>' +
-        '<a class="toolbar-btn" id="toolbar-grid" href="#" onclick="event.preventDefault();toggleGridMenu()" title="Lat/long grid">#</a>' +
-        '<a class="toolbar-btn" id="toolbar-utm" href="#" onclick="event.preventDefault();toggleUtmMenu()" title="UTM zones">▮</a>' +
-        '<div class="toolbar-menu" id="basemap-menu"></div>' +
-        '<div class="toolbar-menu" id="grid-menu"></div>' +
-        '<div class="toolbar-menu" id="utm-menu"></div>';
-    L.DomEvent.disableClickPropagation(div);
-    return div;
+var ToolbarControl = {
+    onAdd: function () {
+        var div = document.createElement("div");
+        div.className = "map-toolbar maplibregl-ctrl";
+        div.innerHTML =
+            '<a class="toolbar-btn" id="toolbar-basemap" href="#" onclick="event.preventDefault();toggleBasemapMenu()" title="Basemap">◫</a>' +
+            '<a class="toolbar-btn" id="toolbar-grid" href="#" onclick="event.preventDefault();toggleGridMenu()" title="Lat/long grid">#</a>' +
+            '<a class="toolbar-btn" id="toolbar-utm" href="#" onclick="event.preventDefault();toggleUtmMenu()" title="UTM zones">▮</a>' +
+            '<div class="toolbar-menu" id="basemap-menu"></div>' +
+            '<div class="toolbar-menu" id="grid-menu"></div>' +
+            '<div class="toolbar-menu" id="utm-menu"></div>';
+        return div;
+    },
+    onRemove: function () {}
 };
-toolbarControl.addTo(map);
+map.addControl(ToolbarControl, "top-left");
 
 function closeAllMenus() {
     ["basemap-menu", "grid-menu", "utm-menu"].forEach(function (id) {
@@ -259,99 +459,68 @@ function toggleBasemapMenu() {
     menu.style.display = "block";
 }
 
+function toggleGridMenu() {
+    var menu = document.getElementById("grid-menu");
+    var wasOpen = menu.style.display === "block";
+    closeAllMenus();
+    if (wasOpen) return;
+    menu.innerHTML = "";
+    gridColors.forEach(function (c, i) {
+        var item = document.createElement("div");
+        item.className = "toolbar-menu-item" + (gridVisible && i === gridColorIndex ? " active" : "");
+        item.innerHTML = "<span class='color-dot' style='background:" + c.line.replace(/0\.\d+\)/, "0.8)") + "'></span>" + c.name;
+        item.onclick = function (e) { e.stopPropagation(); setGridColor(i); menu.style.display = "none"; };
+        menu.appendChild(item);
+    });
+    var sep = document.createElement("div"); sep.className = "toolbar-menu-sep"; menu.appendChild(sep);
+    var off = document.createElement("div");
+    off.className = "toolbar-menu-item" + (!gridVisible ? " active" : "");
+    off.textContent = "Off";
+    off.onclick = function (e) { e.stopPropagation(); gridOff(); menu.style.display = "none"; };
+    menu.appendChild(off);
+    menu.style.display = "block";
+}
+
+function toggleUtmMenu() {
+    var menu = document.getElementById("utm-menu");
+    var wasOpen = menu.style.display === "block";
+    closeAllMenus();
+    if (wasOpen) return;
+    menu.innerHTML = "";
+    utmColors.forEach(function (c, i) {
+        var item = document.createElement("div");
+        item.className = "toolbar-menu-item" + (utmVisible && i === utmColorIndex ? " active" : "");
+        item.innerHTML = "<span class='color-dot' style='background:" + c.line.replace(/0\.\d+\)/, "0.8)") + "'></span>" + c.name;
+        item.onclick = function (e) { e.stopPropagation(); setUtmColor(i); menu.style.display = "none"; };
+        menu.appendChild(item);
+    });
+    var sep = document.createElement("div"); sep.className = "toolbar-menu-sep"; menu.appendChild(sep);
+    var off = document.createElement("div");
+    off.className = "toolbar-menu-item" + (!utmVisible ? " active" : "");
+    off.textContent = "Off";
+    off.onclick = function (e) { e.stopPropagation(); utmOff(); menu.style.display = "none"; };
+    menu.appendChild(off);
+    menu.style.display = "block";
+}
+
 document.addEventListener("click", function (e) {
-    if (!e.target.closest(".map-toolbar")) {
-        closeAllMenus();
-    }
+    if (!e.target.closest(".map-toolbar")) closeAllMenus();
 });
 
-// ── Cursor coordinates ───────────────────────────────
+// ── Layer toggle control ─────────────────────────────
 
-var coordControl = L.control({ position: "bottomleft" });
-coordControl.onAdd = function () {
-    var div = L.DomUtil.create("div", "map-coords");
-    div.textContent = "0.0000, 0.0000";
-    return div;
-};
-coordControl.addTo(map);
-
-map.on("mousemove", function (e) {
-    var el = document.querySelector(".map-coords");
-    if (el) el.textContent = e.latlng.lat.toFixed(4) + ", " + e.latlng.lng.toFixed(4);
-});
-
-// ── Layer toggle control on map ──────────────────────
-
-var layerControl = L.control({ position: "topright" });
-layerControl.onAdd = function () {
-    var div = L.DomUtil.create("div", "map-layer-control");
-    div.innerHTML =
-        '<button id="btn-layer-remote" class="layer-toggle" onclick="toggleRemoteLayer()" title="What\'s available on NBS?">' +
-        '<span class="layer-dot remote"></span>NBS Source</button>' +
-        '<button id="btn-layer-tracked" class="layer-toggle" onclick="toggleTrackedLayer()" title="What\'s the status of your tiles?">' +
-        '<span class="layer-dot tracked"></span>Your Project</button>' +
-        '<button id="btn-layer-fill" class="layer-toggle layer-on" onclick="toggleFill()" title="Toggle fill">' +
-        '<span class="fill-icon"></span>Fill</button>';
-    L.DomEvent.disableClickPropagation(div);
-    return div;
-};
-layerControl.addTo(map);
-
-// Draw layer for user-drawn geometries
-var drawnItems = new L.FeatureGroup();
-map.addLayer(drawnItems);
-
-var drawControl = new L.Control.Draw({
-    draw: {
-        polygon: { showArea: false, allowIntersection: false },
-        rectangle: { showArea: false },
-        circle: false,
-        circlemarker: false,
-        marker: false,
-        polyline: false,
-    },
-    edit: {
-        featureGroup: drawnItems,
-    },
-});
-map.addControl(drawControl);
-
-
-
-// Store the current drawn geometry as GeoJSON
-var currentGeometry = null;
-
-map.on(L.Draw.Event.CREATED, function (event) {
-    drawnItems.clearLayers();
-    var layer = event.layer;
-    drawnItems.addLayer(layer);
-    currentGeometry = JSON.stringify(layer.toGeoJSON().geometry);
-    document.getElementById("opt-geometry").value = currentGeometry;
-});
-
-map.on(L.Draw.Event.DELETED, function () {
-    currentGeometry = null;
-    document.getElementById("opt-geometry").value = "";
-});
-
-
+var layerDiv = document.createElement("div");
+layerDiv.className = "map-layer-control";
+layerDiv.innerHTML =
+    '<button id="btn-layer-remote" class="layer-toggle" onclick="toggleRemoteLayer()" title="What\'s available on NBS?">' +
+    '<span class="layer-dot remote"></span>NBS Source</button>' +
+    '<button id="btn-layer-tracked" class="layer-toggle" onclick="toggleTrackedLayer()" title="What\'s the status of your tiles?">' +
+    '<span class="layer-dot tracked"></span>Your Project</button>' +
+    '<button id="btn-layer-fill" class="layer-toggle layer-on" onclick="toggleFill()" title="Toggle fill">' +
+    '<span class="fill-icon"></span>Fill</button>';
+document.getElementById("map").appendChild(layerDiv);
 
 // ── Tile scheme layers ───────────────────────────────
-
-function getResolution(feature) {
-    var r = feature.properties.Resolution || feature.properties.resolution || "";
-    var n = parseFloat(String(r));
-    return isNaN(n) ? Infinity : n;
-}
-
-function sortByResolutionDesc(geojson) {
-    if (geojson && geojson.features) {
-        geojson.features.sort(function (a, b) {
-            return getResolution(b) - getResolution(a);
-        });
-    }
-    return geojson;
-}
 
 function escapeHtml(s) {
     var div = document.createElement("div");
@@ -359,40 +528,29 @@ function escapeHtml(s) {
     return div.innerHTML;
 }
 
-function buildPopup(props) {
+function buildPopupHtml(props) {
     var rows = "";
     for (var key in props) {
         if (props[key] == null) continue;
-        var val = escapeHtml(String(props[key]));
-        var safeKey = escapeHtml(String(key));
-        rows += "<tr><td class='popup-key'>" + safeKey + "</td><td class='popup-val'>" + val + "</td></tr>";
+        rows += "<tr><td class='popup-key'>" + escapeHtml(String(key)) + "</td><td class='popup-val'>" + escapeHtml(String(props[key])) + "</td></tr>";
     }
-    if (!rows) return null;
-    return "<table class='popup-table'>" + rows + "</table>";
-}
-
-function bindTilePopup(feature, layer) {
-    var html = buildPopup(feature.properties);
-    if (html) layer.bindPopup(html, { maxWidth: 360, className: "dark-popup" });
+    return rows ? "<table class='popup-table'>" + rows + "</table>" : "";
 }
 
 // ── Age-based styling ────────────────────────────────
 
 var AGE_COLORS = [
-    { days: 1,    color: [74, 222, 128] },   // bright green — last day
-    { days: 7,    color: [34, 160, 70] },     // medium green — last week
-    { days: 30,   color: [130, 190, 255] },  // light blue — last month
-    { days: 90,   color: [25, 70, 170] },    // dark blue — last 3 months
-    { days: 180,  color: [200, 200, 208] },  // light grey — last 6 months
-    { days: Infinity, color: [90, 90, 98] }  // dark grey — older
+    { days: 1,    color: [74, 222, 128] },
+    { days: 7,    color: [34, 160, 70] },
+    { days: 30,   color: [130, 190, 255] },
+    { days: 90,   color: [25, 70, 170] },
+    { days: 180,  color: [200, 200, 208] },
+    { days: Infinity, color: [90, 90, 98] }
 ];
-
-var NULL_DATE_COLOR = [30, 30, 30]; // black — no date
-
+var NULL_DATE_COLOR = [30, 30, 30];
 var layerFilled = true;
 
 function getDateField(props) {
-    // BlueTopo / Modeling use Delivered_Date; BAG / S102 use ISSUANCE
     return props["Delivered_Date"] || props["ISSUANCE"] || null;
 }
 
@@ -408,61 +566,127 @@ function ageColor(props) {
     return AGE_COLORS[AGE_COLORS.length - 1].color;
 }
 
-function tileStyle(feature) {
-    var c = ageColor(feature.properties);
-    return {
-        color: "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0.7)",
-        weight: 1,
-        fillColor: "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")",
-        fillOpacity: layerFilled ? 0.8 : 0,
-    };
+function colorFeatures(geojson) {
+    if (!geojson || !geojson.features) return geojson;
+    geojson.features.forEach(function (f) {
+        var c = ageColor(f.properties);
+        f.properties._color = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+    });
+    return geojson;
 }
+
+var TRACKED_COLORS = {
+    up_to_date: "rgb(34,197,94)",
+    updates_available: "rgb(249,115,22)",
+    missing_from_disk: "rgb(239,68,68)",
+    removed_from_scheme: "rgb(160,160,168)",
+};
 
 function toggleFill() {
     layerFilled = !layerFilled;
     document.getElementById("btn-layer-fill").classList.toggle("layer-on", layerFilled);
-    remoteLayer.setStyle(tileStyle);
-    for (var cat in trackedLayers) {
-        trackedLayers[cat].setStyle(trackedStyle(cat));
-    }
+    var opacity = layerFilled ? 0.8 : 0;
+    if (map.getLayer("remote-fill")) map.setPaintProperty("remote-fill", "fill-opacity", opacity);
+    ["up_to_date", "updates_available", "missing_from_disk", "removed_from_scheme"].forEach(function (cat) {
+        if (map.getLayer("tracked-" + cat + "-fill")) map.setPaintProperty("tracked-" + cat + "-fill", "fill-opacity", layerFilled ? 0.7 : 0);
+    });
 }
 
-var remoteLayer = L.geoJSON(null, {
-    style: tileStyle,
-    onEachFeature: bindTilePopup,
+// ── Remote layer ─────────────────────────────────────
+
+function addRemoteToMap(geojson) {
+    if (map.getSource("remote")) {
+        map.getSource("remote").setData(geojson);
+    } else {
+        map.addSource("remote", { type: "geojson", data: geojson });
+        map.addLayer({ id: "remote-fill", type: "fill", source: "remote", paint: { "fill-color": ["get", "_color"], "fill-opacity": layerFilled ? 0.8 : 0 } });
+        map.addLayer({ id: "remote-outline", type: "line", source: "remote", paint: { "line-color": ["get", "_color"], "line-width": 1, "line-opacity": 0.7 } });
+    }
+    raiseDrawLayers();
+}
+
+function removeRemoteFromMap() {
+    if (map.getLayer("remote-outline")) map.removeLayer("remote-outline");
+    if (map.getLayer("remote-fill")) map.removeLayer("remote-fill");
+    if (map.getSource("remote")) map.removeSource("remote");
+}
+
+// ── Tracked layers ───────────────────────────────────
+
+var trackedCategories = ["up_to_date", "updates_available", "missing_from_disk", "removed_from_scheme"];
+
+function addTrackedToMap(data) {
+    trackedCategories.forEach(function (cat) {
+        var geojson = data[cat];
+        if (!geojson || geojson.features.length === 0) return;
+        var srcId = "tracked-" + cat;
+        if (map.getSource(srcId)) {
+            map.getSource(srcId).setData(geojson);
+        } else {
+            map.addSource(srcId, { type: "geojson", data: geojson });
+            map.addLayer({ id: srcId + "-fill", type: "fill", source: srcId, paint: { "fill-color": TRACKED_COLORS[cat], "fill-opacity": layerFilled ? 0.7 : 0 } });
+            map.addLayer({ id: srcId + "-outline", type: "line", source: srcId, paint: { "line-color": TRACKED_COLORS[cat], "line-width": 1, "line-opacity": 0.8 } });
+        }
+    });
+    raiseDrawLayers();
+}
+
+function removeTrackedFromMap() {
+    trackedCategories.forEach(function (cat) {
+        var srcId = "tracked-" + cat;
+        if (map.getLayer(srcId + "-outline")) map.removeLayer(srcId + "-outline");
+        if (map.getLayer(srcId + "-fill")) map.removeLayer(srcId + "-fill");
+        if (map.getSource(srcId)) map.removeSource(srcId);
+    });
+}
+
+// ── Popups ───────────────────────────────────────────
+
+var popup = new maplibregl.Popup({ maxWidth: "360px", className: "dark-popup", closeOnClick: false, closeButton: false });
+
+map.on("click", function (e) {
+    if (drawingMode || rectMode) return;
+    // Check all clickable layers
+    var layers = ["remote-fill"];
+    trackedCategories.forEach(function (cat) { layers.push("tracked-" + cat + "-fill"); });
+    var existing = layers.filter(function (l) { return map.getLayer(l); });
+    if (existing.length === 0) { popup.remove(); return; }
+    var features = map.queryRenderedFeatures(e.point, { layers: existing });
+    if (features.length === 0) { popup.remove(); return; }
+    var props = Object.assign({}, features[0].properties);
+    delete props._color;
+    var html = buildPopupHtml(props);
+    if (html) popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
 });
 
-// ── Tracked tile layers (status-based) ───────────────
+// Pointer cursor on hoverable layers
+map.on("mousemove", function (e) {
+    var layers = ["remote-fill"];
+    trackedCategories.forEach(function (cat) { layers.push("tracked-" + cat + "-fill"); });
+    var existing = layers.filter(function (l) { return map.getLayer(l); });
+    if (existing.length === 0) return;
+    var features = map.queryRenderedFeatures(e.point, { layers: existing });
+    if (!drawingMode && !rectMode) {
+        map.getCanvas().style.cursor = features.length > 0 ? "pointer" : "";
+    }
+});
 
-var TRACKED_COLORS = {
-    up_to_date:          [34, 197, 94],   // green
-    updates_available:   [249, 115, 22],  // orange
-    missing_from_disk:   [239, 68, 68],   // red
-    removed_from_scheme: [160, 160, 168], // grey
-};
+// ── Re-add sources after basemap change ──────────────
 
-function trackedStyle(cat) {
-    var c = TRACKED_COLORS[cat];
-    return function () {
-        return {
-            color: "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0.8)",
-            weight: 1,
-            fillColor: "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")",
-            fillOpacity: layerFilled ? 0.7 : 0,
-        };
-    };
+function readdAllSources() {
+    if (remoteActive && remoteCache.data) {
+        addRemoteToMap(remoteCache.data);
+    }
+    if (trackedActive && trackedCache.data) {
+        addTrackedToMap(trackedCache.data);
+    }
+    if (gridVisible) addGridToMap();
+    if (utmVisible) addUtmToMap();
 }
-
-var trackedLayers = {
-    up_to_date: L.geoJSON(null, { style: trackedStyle("up_to_date"), onEachFeature: bindTilePopup }),
-    updates_available: L.geoJSON(null, { style: trackedStyle("updates_available"), onEachFeature: bindTilePopup }),
-    missing_from_disk: L.geoJSON(null, { style: trackedStyle("missing_from_disk"), onEachFeature: bindTilePopup }),
-    removed_from_scheme: L.geoJSON(null, { style: trackedStyle("removed_from_scheme"), onEachFeature: bindTilePopup }),
-};
 
 // ── Legend ────────────────────────────────────────────
 
-var legendControl = null;
+var legendDiv = null;
 
 function buildLegendHtml() {
     var html = "";
@@ -471,66 +695,51 @@ function buildLegendHtml() {
         var labels = ["< 1 day", "< 1 week", "< 1 month", "< 3 months", "< 6 months", "6+ months"];
         for (var i = 0; i < AGE_COLORS.length; i++) {
             var c = AGE_COLORS[i].color;
-            html += "<div class='legend-row'>"
-                + "<span class='legend-swatch' style='background:rgb(" + c[0] + "," + c[1] + "," + c[2] + ")'></span>"
-                + labels[i] + "</div>";
+            html += "<div class='legend-row'><span class='legend-swatch' style='background:rgb(" + c[0] + "," + c[1] + "," + c[2] + ")'></span>" + labels[i] + "</div>";
         }
-        html += "<div class='legend-row'>"
-            + "<span class='legend-swatch' style='background:rgb(" + NULL_DATE_COLOR[0] + "," + NULL_DATE_COLOR[1] + "," + NULL_DATE_COLOR[2] + ");border:1px solid rgba(255,255,255,0.15)'></span>"
-            + "No delivery</div>";
+        html += "<div class='legend-row'><span class='legend-swatch' style='background:rgb(" + NULL_DATE_COLOR[0] + "," + NULL_DATE_COLOR[1] + "," + NULL_DATE_COLOR[2] + ");border:1px solid rgba(255,255,255,0.15)'></span>No delivery</div>";
     }
     if (trackedActive) {
         if (html) html += "<div class='legend-divider'></div>";
         html += "<div class='legend-section'>Your Project</div>";
-        var cats = [
-            ["up_to_date", "Up to date"],
-            ["updates_available", "Updates available"],
-            ["missing_from_disk", "Missing from disk"],
-            ["removed_from_scheme", "Removed from scheme"],
-        ];
+        var cats = [["up_to_date", "Up to date"], ["updates_available", "Updates available"], ["missing_from_disk", "Missing from disk"], ["removed_from_scheme", "Removed from scheme"]];
         for (var j = 0; j < cats.length; j++) {
-            var tc = TRACKED_COLORS[cats[j][0]];
-            html += "<div class='legend-row'>"
-                + "<span class='legend-swatch' style='background:rgb(" + tc[0] + "," + tc[1] + "," + tc[2] + ")'></span>"
-                + cats[j][1] + "</div>";
+            html += "<div class='legend-row'><span class='legend-swatch' style='background:" + TRACKED_COLORS[cats[j][0]] + "'></span>" + cats[j][1] + "</div>";
         }
     }
     return html;
 }
 
 function updateLegend() {
-    if (legendControl) {
-        map.removeControl(legendControl);
-        legendControl = null;
-    }
+    if (legendDiv) { legendDiv.remove(); legendDiv = null; }
     if (!remoteActive && !trackedActive) return;
-    legendControl = L.control({ position: "bottomright" });
-    legendControl.onAdd = function () {
-        var div = L.DomUtil.create("div", "map-legend");
-        div.innerHTML = buildLegendHtml();
-        return div;
-    };
-    legendControl.addTo(map);
+    legendDiv = document.createElement("div");
+    legendDiv.className = "map-legend";
+    legendDiv.innerHTML = buildLegendHtml();
+    document.getElementById("map").appendChild(legendDiv);
 }
+
+// ── Layer state & caching ────────────────────────────
 
 var remoteActive = false;
 var trackedActive = false;
 var remoteLoading = false;
 var trackedLoading = false;
 
-function clearTrackedLayers() {
-    for (var cat in trackedLayers) {
-        map.removeLayer(trackedLayers[cat]);
-        trackedLayers[cat].clearLayers();
-    }
-}
+var remoteCache = { source: null, data: null, time: 0 };
+var REMOTE_CACHE_MS = 60000;
+
+var trackedCache = { dir: null, source: null, data: null, time: 0 };
+var TRACKED_CACHE_MS = 60000;
+var trackedSkipCache = false;
+var trackedIsReload = false;
+var trackedStartup = false;
 
 function clearAllLayers() {
     if (remoteActive || remoteLoading) {
         remoteActive = false;
         remoteLoading = false;
-        map.removeLayer(remoteLayer);
-        remoteLayer.clearLayers();
+        removeRemoteFromMap();
         var rb = document.getElementById("btn-layer-remote");
         rb.classList.remove("layer-on", "layer-loading");
     }
@@ -540,35 +749,28 @@ function clearAllLayers() {
         trackedSkipCache = false;
         trackedIsReload = false;
         trackedStartup = false;
-        clearTrackedLayers();
+        removeTrackedFromMap();
         var tb = document.getElementById("btn-layer-tracked");
         tb.classList.remove("layer-on", "layer-loading");
     }
     updateLegend();
 }
 
-var remoteCache = { source: null, data: null, time: 0 };
-var REMOTE_CACHE_MS = 60000; // 1 minute
-
 function toggleRemoteLayer() {
     if (remoteLoading) return;
     var btn = document.getElementById("btn-layer-remote");
     if (remoteActive) {
         remoteActive = false;
-        map.removeLayer(remoteLayer);
-        remoteLayer.clearLayers();
+        removeRemoteFromMap();
         btn.classList.remove("layer-on");
         updateLegend();
     } else {
         if (!bridge) return;
         var source = document.getElementById("data-source").value;
-        // Check cache
         if (remoteCache.source === source && remoteCache.data && (Date.now() - remoteCache.time) < REMOTE_CACHE_MS) {
             remoteActive = true;
             btn.classList.add("layer-on");
-            remoteLayer.clearLayers();
-            remoteLayer.addData(remoteCache.data);
-            map.addLayer(remoteLayer);
+            addRemoteToMap(remoteCache.data);
             updateLegend();
             return;
         }
@@ -580,18 +782,12 @@ function toggleRemoteLayer() {
     }
 }
 
-var trackedCache = { dir: null, source: null, data: null, time: 0 };
-var TRACKED_CACHE_MS = 60000; // 1 minute
-var trackedSkipCache = false;
-var trackedIsReload = false;
-var trackedStartup = false;
-
 function toggleTrackedLayer() {
     if (trackedLoading) return;
     var btn = document.getElementById("btn-layer-tracked");
     if (trackedActive) {
         trackedActive = false;
-        clearTrackedLayers();
+        removeTrackedFromMap();
         btn.classList.remove("layer-on");
         updateLegend();
     } else {
@@ -600,19 +796,11 @@ function toggleTrackedLayer() {
         var dir = document.getElementById("project-dir").value;
         if (!dir) return;
         var source = document.getElementById("data-source").value;
-        // Check cache (only for manual clicks, not startup or post-fetch)
         if (!trackedSkipCache && trackedCache.dir === dir && trackedCache.source === source
             && trackedCache.data && (Date.now() - trackedCache.time) < TRACKED_CACHE_MS) {
             trackedActive = true;
             btn.classList.add("layer-on");
-            clearTrackedLayers();
-            for (var cat in trackedCache.data) {
-                var geojson = trackedCache.data[cat];
-                if (geojson.features.length > 0) {
-                    trackedLayers[cat].addData(geojson);
-                    map.addLayer(trackedLayers[cat]);
-                }
-            }
+            addTrackedToMap(trackedCache.data);
             updateLegend();
             return;
         }
@@ -636,6 +824,22 @@ function reloadTrackedLayer() {
     bridge.load_tracked_layer(dir, source);
 }
 
+// ── Fit bounds helper ────────────────────────────────
+
+function fitToGeojson(geojson) {
+    if (!geojson || !geojson.features || geojson.features.length === 0) return;
+    var bounds = new maplibregl.LngLatBounds();
+    geojson.features.forEach(function (f) {
+        if (!f.geometry || !f.geometry.coordinates) return;
+        var coords = f.geometry.type === "Polygon" ? f.geometry.coordinates[0] :
+                     f.geometry.type === "MultiPolygon" ? f.geometry.coordinates[0][0] : [];
+        coords.forEach(function (c) { bounds.extend(c); });
+    });
+    if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 20 });
+}
+
+// ── onLayersReady ────────────────────────────────────
+
 function onLayersReady(data) {
     if (data.layer === "remote") {
         remoteLoading = false;
@@ -647,17 +851,13 @@ function onLayersReady(data) {
             showToast(data.error);
             return;
         }
-        sortByResolutionDesc(data.data);
+        colorFeatures(data.data);
         remoteCache.source = document.getElementById("data-source").value;
         remoteCache.data = data.data;
         remoteCache.time = Date.now();
-        remoteLayer.clearLayers();
-        remoteLayer.addData(data.data);
-        map.addLayer(remoteLayer);
+        addRemoteToMap(data.data);
         updateLegend();
-        if (!data.cached && remoteLayer.getLayers().length > 0) {
-            map.fitBounds(remoteLayer.getBounds(), { padding: [20, 20] });
-        }
+        if (!data.cached) fitToGeojson(data.data);
     } else if (data.layer === "tracked") {
         trackedLoading = false;
         var btn = document.getElementById("btn-layer-tracked");
@@ -669,29 +869,19 @@ function onLayersReady(data) {
             showToast(data.error);
             return;
         }
-        for (var cat in data.data) {
-            sortByResolutionDesc(data.data[cat]);
-        }
         trackedCache.dir = document.getElementById("project-dir").value;
         trackedCache.source = document.getElementById("data-source").value;
         trackedCache.data = data.data;
         trackedCache.time = Date.now();
-        clearTrackedLayers();
-        var bounds = null;
-        for (var cat in data.data) {
-            var geojson = data.data[cat];
-            if (geojson.features.length > 0) {
-                trackedLayers[cat].addData(geojson);
-                map.addLayer(trackedLayers[cat]);
-                var b = trackedLayers[cat].getBounds();
-                if (b.isValid()) {
-                    bounds = bounds ? bounds.extend(b) : b;
-                }
-            }
-        }
+        addTrackedToMap(data.data);
         updateLegend();
-        if (bounds && bounds.isValid() && !trackedIsReload) {
-            map.fitBounds(bounds, { padding: [20, 20] });
+        if (!trackedIsReload) {
+            // Fit to all tracked features
+            var allFeatures = [];
+            for (var cat in data.data) {
+                if (data.data[cat].features) allFeatures = allFeatures.concat(data.data[cat].features);
+            }
+            if (allFeatures.length > 0) fitToGeojson({ type: "FeatureCollection", features: allFeatures });
         }
         trackedIsReload = false;
 
